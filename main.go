@@ -5,11 +5,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 func main() {
 	if len(os.Args) != 3 {
-		fmt.Println("Usage: go run . <input.txt> <output.txt>")
+		fmt.Println("Usage: go run. <input.txt> <output.txt>")
 		return
 	}
 
@@ -27,13 +28,10 @@ func main() {
 	}
 }
 
-// processText acts as the orchestrator, passing text through sequential logic blocks
 func processText(text string) string {
-	// Step 1: Pre-process to separate punctuation from words
 	text = preProcess(text)
 	words := strings.Fields(text)
 
-	// Step 2: Apply logic modifications
 	words = processModifiers(words)
 	words = fixPunctuation(words)
 	words = fixQuotes(words)
@@ -43,24 +41,76 @@ func processText(text string) string {
 }
 
 func preProcess(text string) string {
-	// Isolates punctuation and groups like ... or !? so they can be processed independently
-	replacer := strings.NewReplacer(
-		"...", " ... ",
-		"!?", " !? ",
-		".", " . ",
-		",", " , ",
-		"!", " ! ",
-		"?", " ? ",
-		":", " : ",
-		";", " ; ",
-		"'", " ' ",
-	)
-	return replacer.Replace(text)
+	modifiers := []string{
+		"(up,", "(low,", "(cap,",
+		"(up)", "(low)", "(cap)",
+		"(hex)", "(bin)",
+	}
+	placeholders := make(map[string]string)
+	for idx, mod := range modifiers {
+		ph := fmt.Sprintf("__MOD_%d__", idx)
+		placeholders[ph] = mod
+		text = strings.ReplaceAll(text, mod, ph)
+	}
+
+	var result strings.Builder
+	runes := []rune(text)
+
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
+
+		if ch == '.' && i+2 < len(runes) && runes[i+1] == '.' && runes[i+2] == '.' {
+			result.WriteString("... ")
+			i += 2
+			continue
+		}
+		if ch == '!' && i+1 < len(runes) && runes[i+1] == '?' {
+			result.WriteString("!? ")
+			i++
+			continue
+		}
+
+		if ch == '\'' {
+			if i > 0 && i < len(runes)-1 && isLetter(runes[i-1]) && isLetter(runes[i+1]) {
+				result.WriteRune(ch)
+			} else {
+				result.WriteString(" ' ")
+			}
+			continue
+		}
+
+		if ch == '(' || ch == '"' || ch == '—' {
+			result.WriteString(" " + string(ch) + " ")
+			continue
+		}
+		// التعديل هنا: قفل القوس ما يتفصلش لو لازق في كلمة
+		if ch == ')' {
+			if i > 0 && isLetter(runes[i-1]) {
+				result.WriteRune(ch)
+			} else {
+				result.WriteString(" " + string(ch) + " ")
+			}
+			continue
+		}
+
+		if isPunctuationRune(ch) {
+			result.WriteString(" " + string(ch) + " ")
+			continue
+		}
+
+		result.WriteRune(ch)
+	}
+
+	output := result.String()
+	for ph, mod := range placeholders {
+		output = strings.ReplaceAll(output, ph, mod)
+	}
+
+	return output
 }
 
 func processModifiers(words []string) []string {
 	for i := 0; i < len(words); i++ {
-		// Handle basic modifiers
 		if words[i] == "(hex)" {
 			if i > 0 {
 				words[i-1] = hexToDecimal(words[i-1])
@@ -81,7 +131,6 @@ func processModifiers(words []string) []string {
 			words = append(words[:i], words[i+1:]...)
 			i--
 		} else if i+1 < len(words) && (words[i] == "(up," || words[i] == "(low," || words[i] == "(cap,") {
-			// Handle parameterized modifiers like (up, 2)
 			mod := strings.Trim(words[i], "(,")
 			countStr := strings.Trim(words[i+1], ")")
 			count, err := strconv.Atoi(countStr)
@@ -89,7 +138,6 @@ func processModifiers(words []string) []string {
 			if err == nil && i > 0 {
 				applyModification(words, i-1, count, mod)
 			}
-			// Remove both the tag and the number from the slice
 			words = append(words[:i], words[i+2:]...)
 			i--
 		}
@@ -98,8 +146,13 @@ func processModifiers(words []string) []string {
 }
 
 func applyModification(words []string, startIdx, count int, mod string) {
-	for j := 0; j < count && startIdx-j >= 0; j++ {
-		idx := startIdx - j
+	applied := 0
+	idx := startIdx
+	for applied < count && idx >= 0 {
+		if isPunctuation(words[idx]) {
+			idx--
+			continue
+		}
 		switch mod {
 		case "up":
 			words[idx] = strings.ToUpper(words[idx])
@@ -108,6 +161,8 @@ func applyModification(words []string, startIdx, count int, mod string) {
 		case "cap":
 			words[idx] = capitalize(words[idx])
 		}
+		applied++
+		idx--
 	}
 }
 
@@ -115,7 +170,6 @@ func fixPunctuation(words []string) []string {
 	var result []string
 	for _, word := range words {
 		if isPunctuation(word) && len(result) > 0 {
-			// Attach punctuation strictly to the previous word
 			result[len(result)-1] += word
 		} else {
 			result = append(result, word)
@@ -131,15 +185,14 @@ func fixQuotes(words []string) []string {
 		if word == "'" {
 			if !isOpen {
 				isOpen = true
-				result = append(result, word) // Add as a standalone opening quote temporarily
+				result = append(result, word)
 			} else {
 				if len(result) > 0 {
-					result[len(result)-1] += "'" // Attach closing quote to the previous word
+					result[len(result)-1] += "'"
 				}
 				isOpen = false
 			}
 		} else {
-			// If a quote is currently open and waiting for its first word
 			if isOpen && len(result) > 0 && result[len(result)-1] == "'" {
 				result[len(result)-1] = "'" + word
 			} else {
@@ -155,14 +208,13 @@ func fixArticles(words []string) []string {
 		if words[i] == "a" || words[i] == "A" {
 			nextWord := words[i+1]
 			if len(nextWord) > 0 {
-				// Strip any leading quotes to accurately check the first letter of the actual word
 				firstChar := rune(nextWord[0])
 				if firstChar == '\'' && len(nextWord) > 1 {
 					firstChar = rune(nextWord[1])
 				}
 
 				firstChar = rune(strings.ToLower(string(firstChar))[0])
-				if isVowelOrH(firstChar) {
+				if isVowel(firstChar) {
 					if words[i] == "a" {
 						words[i] = "an"
 					} else {
@@ -174,8 +226,6 @@ func fixArticles(words []string) []string {
 	}
 	return words
 }
-
-// ── Helper Utilities ──────────────────────────────────────────
 
 func hexToDecimal(s string) string {
 	n, err := strconv.ParseInt(s, 16, 64)
@@ -204,6 +254,27 @@ func isPunctuation(s string) bool {
 	return s == "." || s == "," || s == "!" || s == "?" || s == ":" || s == ";" || s == "..." || s == "!?"
 }
 
-func isVowelOrH(r rune) bool {
-	return r == 'a' || r == 'e' || r == 'i' || r == 'o' || r == 'u' || r == 'h'
+func isPunctuationRune(r rune) bool {
+	return r == '.' || r == ',' || r == '!' || r == '?' || r == ':' || r == ';'
+}
+
+func isLetter(r rune) bool {
+	return unicode.IsLetter(r)
+}
+
+func isVowel(r rune) bool {
+	return r == 'a' || r == 'e' || r == 'i' || r == 'o' || r == 'u'
+}
+func removeStrayParentheses(words []string) []string {
+	var result []string
+	for i, word := range words {
+		// extra step to avoid (())
+		if word == ")" {
+			if i > 0 && !strings.HasSuffix(words[i-1], ")") && !isPunctuation(words[i-1]) {
+				continue // نتجاهلها
+			}
+		}
+		result = append(result, word)
+	}
+	return result
 }
