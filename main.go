@@ -271,7 +271,7 @@ func removeStrayParentheses(words []string) []string {
 		// extra step to avoid (())
 		if word == ")" {
 			if i > 0 && !strings.HasSuffix(words[i-1], ")") && !isPunctuation(words[i-1]) {
-				continue // نتجاهلها
+				continue 
 			}
 		}
 		result = append(result, word)
